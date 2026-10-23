@@ -450,11 +450,20 @@ const REST_DEFAULTS = {
   squat: 150, bench: 120, row: 120, ohp: 120, 'wrist-curl': 60, crunch: 60, 'leg-raise': 60,
   'leg-press': 150, 'lat-pulldown': 120, 'incline-press': 120, 'lateral-raise': 60, 'wrist-ext': 60, twist: 60,
 };
+// Дни раньше назывались по дням недели — переименовываем и в программе, и в истории
+const DAY_RENAME = { wed: ['Среда', 'День А'], sun: ['Воскресенье', 'День Б'] };
+function migrate(st) {
+  for (const d of st.program.days) {
+    if (DAY_RENAME[d.id]?.[0] === d.name) d.name = DAY_RENAME[d.id][1];
+    for (const ex of d.exercises) if (ex.rest === undefined) ex.rest = REST_DEFAULTS[ex.id] || null;
+  }
+  for (const x of st.sessions) if (DAY_RENAME[x.dayId]?.[0] === x.dayName) x.dayName = DAY_RENAME[x.dayId][1];
+}
 function defaultProgram() {
   const ex = (id, name, reps, kind, extra = {}) =>
     ({ id, name, sets: 3, reps, kind, equipment: OPTIONS[kind] ? OPTIONS[kind][0] : null, weight: '', note: '', rest: REST_DEFAULTS[id] || null, ...extra });
   return { days: [
-    { id: 'wed', name: 'Среда', weekday: 3, exercises: [
+    { id: 'wed', name: 'День А', exercises: [
       ex('squat', 'Приседания', '8-10', 'free'),
       ex('bench', 'Жим лёжа', '8-10', 'free', { weight: 25 }),
       ex('row', 'Тяга в наклоне', '8-10', 'free', { weight: 25 }),
@@ -464,7 +473,7 @@ function defaultProgram() {
       ex('crunch', 'Скручивания (верх пресса)', '15-20', 'body'),
       ex('leg-raise', 'Подъём ног лёжа (низ пресса)', '12-15', 'body'),
     ] },
-    { id: 'sun', name: 'Воскресенье', weekday: 0, exercises: [
+    { id: 'sun', name: 'День Б', exercises: [
       ex('leg-press', 'Жим ногами', '10-12', 'machine', { weight: 70, note: '70–80 кг' }),
       ex('lat-pulldown', 'Тяга верхнего блока', '8-10', 'machine'),
       ex('incline-press', 'Жим на наклонной', '8-10', 'free', { equipment: 'dumbbell' }),
@@ -487,8 +496,7 @@ function load() {
   return { program: defaultProgram(), sessions: [], draft: {}, settings: {} };
 }
 let state = load();
-// Программы, сохранённые до появления отдельного отдыха, получают значения по умолчанию
-for (const d of state.program.days) for (const ex of d.exercises) if (ex.rest === undefined) ex.rest = REST_DEFAULTS[ex.id] || null;
+migrate(state);
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); }
   catch { toast('Не удалось сохранить данные'); }
@@ -510,14 +518,13 @@ const fmtMin = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} ч ${Math.roun
 const dkey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
+// Дни чередуются: открываем начатую тренировку, иначе день, следующий за последним сделанным
 function nearestDayId() {
-  const today = new Date().getDay();
-  let best = state.program.days[0], bestDist = 8;
-  for (const d of state.program.days) {
-    const dist = (d.weekday - today + 7) % 7;
-    if (dist < bestDist) { best = d; bestDist = dist; }
-  }
-  return best.id;
+  const days = state.program.days;
+  const inProgress = days.find((d) => draftStart(d));
+  if (inProgress) return inProgress.id;
+  const i = state.sessions.length ? days.findIndex((d) => d.id === state.sessions[0].dayId) : -1;
+  return days[(i + 1) % days.length].id;
 }
 const ui = { tab: 'workout', dayId: nearestDayId(), histView: 'log', timeDay: null };
 const getDay = (id) => state.program.days.find((d) => d.id === id) || state.program.days[0];
@@ -917,16 +924,15 @@ function viewSettings() {
       </div>
       <p class="hint">Свой отдых для упражнения задаётся в его настройках выше. Пока идёт тренировка, экран не гаснет. В беззвучном режиме iPhone сигнал не слышен.</p>
     </section>
-    <h3>Автокопия в GitHub</h3>
+    <h3>Синхронизация устройств</h3>
     <section class="card">
       ${gist ? `
-      <p class="status${gist.error ? ' err' : ''}">${gist.error ? esc(gist.error) : 'Подключено'}${gist.syncedAt ? ` · последняя копия ${new Date(gist.syncedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ''}</p>
-      <p class="hint">Копия сама сохраняется в секретный Gist после каждой тренировки и правки. Без сети — при следующем открытии.</p>
-      <button class="secondary" data-act="gist-sync">Сохранить сейчас</button>
-      <button class="secondary" data-act="gist-restore">Восстановить из Gist</button>
-      <button class="secondary danger" data-act="gist-off">Отключить</button>` : `
-      <p class="hint" style="margin-top:0">После каждой тренировки копия будет сама сохраняться в секретный Gist вашего аккаунта GitHub.</p>
-      <p class="hint">1. <a href="https://github.com/settings/tokens/new?scopes=gist&description=workout-tracker" target="_blank" rel="noopener">Создайте токен</a> с единственным доступом «gist».<br>2. Вставьте его сюда. Токен хранится только на этом устройстве и в копию не попадает.</p>
+      <p class="status${gist.error ? ' err' : ''}">${gist.error ? esc(gist.error) : 'Включена'}${gist.syncedAt ? ` · ${new Date(gist.syncedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ''}</p>
+      <p class="hint">История, программа и настройки отдыха одинаковые на всех устройствах с этим токеном. Обмен идёт при открытии сайта и после каждого изменения; без сети — как только она появится. Начатая, но не завершённая тренировка остаётся на своём устройстве.</p>
+      <button class="secondary" data-act="gist-sync">Синхронизировать сейчас</button>
+      <button class="secondary danger" data-act="gist-off">Отключить на этом устройстве</button>` : `
+      <p class="hint" style="margin-top:0">Чтобы история и программа были одинаковыми на телефоне и ноутбуке, подключите на каждом устройстве один и тот же токен GitHub. Данные хранятся в секретном Gist вашего аккаунта — это же и автоматическая резервная копия.</p>
+      <p class="hint">1. <a href="https://github.com/settings/tokens/new?scopes=gist&description=gym-sync" target="_blank" rel="noopener">Создайте токен</a> с единственным доступом «gist» и сохраните его — GitHub покажет его один раз.<br>2. Вставьте токен сюда.<br>3. На другом устройстве откройте сайт и вставьте тот же токен.</p>
       <input class="input" id="gist-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Токен GitHub" aria-label="Токен GitHub" style="margin-top:10px">
       <button class="secondary" data-act="gist-connect">Подключить</button>`}
     </section>
@@ -1103,6 +1109,7 @@ function finishWorkout() {
     id: uid(), date: new Date().toISOString(), dayId: day.id, dayName: day.name, entries,
     duration: d.startedAt && lastT > d.startedAt ? Math.round((lastT - d.startedAt) / 1000) : null,
     note: (d.note || '').trim(),
+    updatedAt: Date.now(),
   };
   state.sessions.unshift(session);
   delete state.draft[day.id];
@@ -1195,10 +1202,9 @@ const actions = {
   'se-cancel'() { sessDlg.close(); },
   'summary-close'() { $('#summary').close(); },
   'gist-connect'() { gistConnect(); },
-  'gist-sync'() { syncGist(false); },
-  'gist-restore'() { gistRestore(true); },
+  'gist-sync'() { syncGist(true); },
   'gist-off'() {
-    if (!confirm('Отключить автокопию? Токен будет удалён с этого устройства, сам Gist останется в GitHub.')) return;
+    if (!confirm('Отключить синхронизацию на этом устройстве? Токен будет удалён отсюда, данные в Gist и на других устройствах останутся.')) return;
     gist = null; saveGist(); render();
   },
   'se-save'() {
@@ -1209,6 +1215,7 @@ const actions = {
     const target = state.sessions.find((x) => x.id === sessEdit.id);
     target.entries = entries;
     target.note = (sessEdit.note || '').trim();
+    target.updatedAt = Date.now();
     pruneDrafts();
     save(); sessDlg.close(); render(); queueGist();
     toast('Тренировка обновлена');
@@ -1239,6 +1246,7 @@ const actions = {
     if (!confirm('Удалить эту тренировку из истории?')) return;
     const id = el.closest('[data-session]').dataset.session;
     state.sessions = state.sessions.filter((s) => s.id !== id);
+    (state.deleted ||= {})[id] = Date.now();
     pruneDrafts();
     save(); render(); queueGist();
   },
@@ -1252,6 +1260,7 @@ const actions = {
     const day = getDay(editing.dayId);
     day.exercises = day.exercises.filter((e) => e.id !== editing.exId);
     delete state.draft[day.id]?.entries[editing.exId];
+    touchProgram();
     save(); editor.close(); render();
   },
   'program-reset'() {
@@ -1259,6 +1268,7 @@ const actions = {
     state.program = defaultProgram();
     state.draft = {};
     ui.dayId = nearestDayId();
+    touchProgram();
     save(); render();
     toast('Программа сброшена');
   },
@@ -1272,6 +1282,7 @@ function moveEx(el, dir) {
   const j = i + dir;
   if (j < 0 || j >= day.exercises.length) return;
   [day.exercises[i], day.exercises[j]] = [day.exercises[j], day.exercises[i]];
+  touchProgram();
   save(); render();
 }
 
@@ -1312,8 +1323,8 @@ app.addEventListener('input', (ev) => {
 });
 app.addEventListener('focusin', (ev) => { if (ev.target.matches('input[data-f]')) ev.target.select(); });
 app.addEventListener('change', (ev) => {
-  if (ev.target.id === 'rest-select') { state.settings.rest = +ev.target.value; save(); }
-  if (ev.target.id === 'sound-select') { state.settings.sound = ev.target.value === '1'; save(); }
+  if (ev.target.id === 'rest-select') { state.settings.rest = +ev.target.value; touchSettings(); save(); }
+  if (ev.target.id === 'sound-select') { state.settings.sound = ev.target.value === '1'; touchSettings(); save(); }
 });
 
 /* ---------- exercise editor ---------- */
@@ -1366,7 +1377,8 @@ edForm.addEventListener('submit', () => {
   } else {
     day.exercises.push({ id: uid(), ...data });
   }
-  save(); render(); queueGist();
+  touchProgram();
+  save(); render();
 });
 
 /* ---------- прогресс по упражнению ---------- */
@@ -1487,90 +1499,144 @@ sessDlg.addEventListener('input', (ev) => {
   sessEdit.entries[+row.dataset.ei].sets[+row.dataset.si][ev.target.dataset.f] = ev.target.value.trim().replace(',', '.');
 });
 
-/* ---------- автокопия в GitHub Gist ---------- */
+/* ---------- синхронизация через GitHub Gist ---------- */
 // Токен лежит отдельно от данных, чтобы не попасть ни в файл копии, ни в сам Gist
 const GIST_KEY = 'workout-tracker.gist', GIST_FILE = 'workout-tracker-backup.json';
+const SHARED_SETTINGS = ['rest', 'sound'];
 let gist = (() => { try { return JSON.parse(localStorage.getItem(GIST_KEY)) || null; } catch { return null; } })();
-let gistBusy = false;
+let gistBusy = false, gistAgain = false, gistTimer = null, pendingRender = false;
 function saveGist() {
   try { gist ? localStorage.setItem(GIST_KEY, JSON.stringify(gist)) : localStorage.removeItem(GIST_KEY); } catch {}
 }
-const backupJson = () => JSON.stringify({ program: state.program, sessions: state.sessions, settings: state.settings, savedAt: new Date().toISOString() }, null, 2);
+// То, что общее для всех устройств; черновик тренировки и местные настройки сюда не входят
+function syncPayload(src) {
+  const settings = {};
+  for (const k of SHARED_SETTINGS) if (src.settings && k in src.settings) settings[k] = src.settings[k];
+  return {
+    program: src.program, programUpdatedAt: src.programUpdatedAt || 0,
+    sessions: src.sessions || [], deleted: src.deleted || {},
+    settings, settingsUpdatedAt: src.settingsUpdatedAt || 0,
+  };
+}
 async function gh(path, opts = {}) {
   const res = await fetch('https://api.github.com' + path, {
+    cache: 'no-store',
     ...opts,
     headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${gist.token}`, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
   });
   if (!res.ok) throw Object.assign(new Error('GitHub ' + res.status), { status: res.status });
   return res.json();
 }
-const gistErrorText = (e) => (e.status === 401 ? 'Токен не подходит или истёк' : e.status === 403 || e.status === 404 ? 'У токена нет доступа к Gist' : e.status ? `Ошибка GitHub ${e.status}` : 'Нет сети — копия сохранится позже');
+const gistErrorText = (e) => (e.status === 401 ? 'Токен не подходит или истёк' : e.status === 403 ? 'У токена нет доступа к Gist' : e.status ? `Ошибка GitHub ${e.status}` : 'Нет сети — синхронизирую позже');
 function validBackup(data) {
   return data && data.program && Array.isArray(data.program.days) && data.program.days.length && Array.isArray(data.sessions);
 }
+// Импорт из файла: заменяет данные и считается самым свежим изменением
 function applyBackup(data) {
-  state = { program: data.program, sessions: data.sessions, settings: data.settings || {}, draft: {} };
-  for (const d of state.program.days) for (const ex of d.exercises) if (ex.rest === undefined) ex.rest = REST_DEFAULTS[ex.id] || null;
+  state = {
+    program: data.program, programUpdatedAt: Date.now(),
+    sessions: data.sessions, deleted: data.deleted || {},
+    settings: data.settings || {}, settingsUpdatedAt: Date.now(), draft: {},
+  };
+  migrate(state);
   ui.dayId = nearestDayId();
   save(); render();
 }
-async function syncGist(silent = true) {
-  if (!gist || gistBusy) return;
-  gistBusy = true;
-  try {
-    const body = JSON.stringify({ description: 'Workout tracker backup', public: false, files: { [GIST_FILE]: { content: backupJson() } } });
-    if (gist.id) {
-      try { await gh('/gists/' + gist.id, { method: 'PATCH', body }); }
-      catch (e) { if (e.status === 404) gist.id = null; else throw e; }
-    }
-    if (!gist.id) gist.id = (await gh('/gists', { method: 'POST', body })).id;
-    Object.assign(gist, { dirty: false, error: null, syncedAt: Date.now() });
-    state.settings.lastBackup = Date.now();
-    delete state.settings.backupSnooze;
-    save();
-    if (!silent) toast('Копия сохранена в Gist');
-  } catch (e) {
-    Object.assign(gist, { dirty: true, error: gistErrorText(e) });
-    if (!silent) toast(gist.error);
+function touchProgram() { state.programUpdatedAt = Date.now(); queueGist(); }
+function touchSettings() { state.settingsUpdatedAt = Date.now(); queueGist(); }
+
+// Слияние: тренировки объединяются по id (при правке на двух устройствах побеждает более поздняя),
+// удалённые не возвращаются, программа и настройки — по времени последнего изменения
+function mergeRemote(remote) {
+  const before = JSON.stringify(syncPayload(state));
+  const freshDevice = !state.programUpdatedAt && !state.sessions.length;
+  const del = { ...(remote.deleted || {}) };
+  for (const [k, t] of Object.entries(state.deleted || {})) del[k] = Math.max(del[k] || 0, t);
+  const byId = new Map();
+  for (const x of [...state.sessions, ...(remote.sessions || [])]) {
+    if (del[x.id]) continue;
+    const cur = byId.get(x.id);
+    if (!cur || (x.updatedAt || 0) > (cur.updatedAt || 0)) byId.set(x.id, x);
   }
-  saveGist();
-  gistBusy = false;
-  if (ui.tab !== 'workout') render();
-}
-function queueGist() {
-  if (!gist) return;
-  gist.dirty = true;
-  saveGist();
-  syncGist();
+  state.sessions = [...byId.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  state.deleted = del;
+  if (validBackup(remote) && ((remote.programUpdatedAt || 0) > (state.programUpdatedAt || 0) || freshDevice)) {
+    state.program = remote.program;
+    state.programUpdatedAt = remote.programUpdatedAt || 0;
+  }
+  if ((remote.settingsUpdatedAt || 0) > (state.settingsUpdatedAt || 0)) {
+    for (const k of SHARED_SETTINGS) if (remote.settings && k in remote.settings) state.settings[k] = remote.settings[k];
+    state.settingsUpdatedAt = remote.settingsUpdatedAt;
+  }
+  migrate(state);
+  return JSON.stringify(syncPayload(state)) !== before;
 }
 async function gistFetch() {
   const g = await gh('/gists/' + gist.id);
   const f = g.files[GIST_FILE];
   if (!f) return null;
-  const data = JSON.parse(f.truncated ? await (await fetch(f.raw_url)).text() : f.content);
-  return validBackup(data) ? data : null;
+  return JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content);
 }
-async function gistRestore(manual) {
+// Не перерисовываем экран, пока человек вводит вес или повторы
+function safeRender() {
+  const a = document.activeElement;
+  if (a && app.contains(a) && a.matches('input, textarea, select')) { pendingRender = true; return; }
+  render();
+}
+app.addEventListener('focusout', () => setTimeout(() => {
+  const a = document.activeElement;
+  if (pendingRender && !(a && app.contains(a) && a.matches('input, textarea, select'))) { pendingRender = false; render(); }
+}, 0));
+
+async function syncGist(manual = false) {
+  if (!gist) return;
+  if (gistBusy) { gistAgain = true; return; }
+  gistBusy = true;
+  clearTimeout(gistTimer);
   try {
-    const data = gist.id ? await gistFetch() : null;
-    if (!data) { if (manual) toast('В Gist пока нет копии'); return false; }
-    const when = data.savedAt ? new Date(data.savedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : '';
-    if (!manual && data.sessions.length <= state.sessions.length) return false;
-    if (!confirm(`В Gist есть копия${when ? ' от ' + when : ''}: тренировок — ${data.sessions.length} (на этом устройстве — ${state.sessions.length}). Заменить данные на этом устройстве?`)) return false;
-    applyBackup(data);
-    toast('Данные восстановлены из Gist');
-    return true;
+    let remote = null;
+    if (gist.id) {
+      try { remote = await gistFetch(); }
+      catch (e) { if (e.status === 404) gist.id = null; else throw e; }
+    }
+    const changed = remote ? mergeRemote(remote) : false;
+    if (changed) { pruneDrafts(); save(); }
+    const payload = syncPayload(state);
+    if (!remote || JSON.stringify(syncPayload(remote)) !== JSON.stringify(payload)) {
+      const body = JSON.stringify({ description: 'Gym tracker sync', public: false, files: { [GIST_FILE]: { content: JSON.stringify({ ...payload, savedAt: new Date().toISOString() }) } } });
+      if (gist.id) await gh('/gists/' + gist.id, { method: 'PATCH', body });
+      else gist.id = (await gh('/gists', { method: 'POST', body })).id;
+    }
+    Object.assign(gist, { dirty: false, error: null, syncedAt: Date.now() });
+    state.settings.lastBackup = Date.now();
+    delete state.settings.backupSnooze;
+    save();
+    if (changed) toast('Данные обновлены с другого устройства');
+    else if (manual) toast('Синхронизировано');
+    if (changed || ui.tab === 'settings') safeRender();
   } catch (e) {
-    toast(gistErrorText(e));
-    return false;
+    Object.assign(gist, { dirty: true, error: gistErrorText(e) });
+    if (manual) toast(gist.error);
+    if (ui.tab === 'settings') safeRender();
   }
+  saveGist();
+  gistBusy = false;
+  if (gistAgain) { gistAgain = false; syncGist(); }
+}
+// Изменения отправляются с небольшой задержкой, чтобы несколько правок ушли одним запросом
+function queueGist() {
+  if (!gist) return;
+  gist.dirty = true;
+  saveGist();
+  clearTimeout(gistTimer);
+  gistTimer = setTimeout(() => syncGist(), 1500);
 }
 async function gistConnect() {
   const token = $('#gist-token').value.trim();
   if (!token) { toast('Вставьте токен'); return; }
   gist = { token, id: null };
   try {
-    // уже есть копия с другого устройства или прошлого подключения?
+    // данные с другого устройства уже есть?
     const found = (await gh('/gists?per_page=100')).find((g) => g.files && g.files[GIST_FILE]);
     if (found) gist.id = found.id;
   } catch (e) {
@@ -1579,11 +1645,13 @@ async function gistConnect() {
     return;
   }
   saveGist();
-  const restored = gist.id ? await gistRestore(false) : false;
-  if (!restored) await syncGist(false);
+  await syncGist(true);
   render();
 }
-addEventListener('online', () => { if (gist?.dirty) syncGist(); });
+addEventListener('online', () => syncGist());
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && gist && Date.now() - (gist.syncedAt || 0) > 30000) syncGist();
+});
 
 /* ---------- backup ---------- */
 async function exportData() {
@@ -1632,7 +1700,7 @@ setInterval(() => {
 
 /* ---------- start ---------- */
 render();
-if (gist?.dirty) syncGist();
+syncGist();
 navigator.storage?.persist?.();
 if ('serviceWorker' in navigator) {
   addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
