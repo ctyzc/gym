@@ -237,6 +237,13 @@ a { color: var(--accent); }
 .cal .d.on { background: var(--accent); color: var(--on-accent); font-weight: 800; }
 .cal .d.today { box-shadow: inset 0 0 0 1.5px var(--muted); }
 .cal .d.future { opacity: .35; }
+button.d { width: 100%; padding: 0; }
+.cal .d.on.sel { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.cal-head .m { font-weight: 700; }
+.cal-head .m::first-letter { text-transform: uppercase; }
+.list-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 18px; }
+.list-head h3 { margin: 0; }
 .h-actions { display: flex; gap: 14px; flex: none; }
 .h-list li { display: flex; justify-content: space-between; gap: 12px; }
 .h-list .dur { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -526,7 +533,7 @@ function nearestDayId() {
   const i = state.sessions.length ? days.findIndex((d) => d.id === state.sessions[0].dayId) : -1;
   return days[(i + 1) % days.length].id;
 }
-const ui = { tab: 'workout', dayId: nearestDayId(), histView: 'log', timeDay: null };
+const ui = { tab: 'workout', dayId: nearestDayId(), histView: 'log', timeDay: null, histDate: null, calMonth: null };
 const getDay = (id) => state.program.days.find((d) => d.id === id) || state.program.days[0];
 const getEx = (day, id) => day.exercises.find((e) => e.id === id);
 
@@ -768,51 +775,45 @@ function viewWorkout() {
     ${done || started ? '<button class="secondary" data-act="reset-draft">Сбросить тренировку</button>' : ''}`;
 }
 
-function weekStart(d) {
-  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
-  return x;
-}
-function attendance() {
-  const days = new Set(state.sessions.map((s) => dkey(new Date(s.date))));
-  const planned = state.program.days.length;
-  const cur = weekStart(new Date());
-  const inWeek = (k) => {
-    let n = 0;
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(cur);
-      d.setDate(cur.getDate() - 7 * k + i);
-      if (days.has(dkey(d))) n++;
-    }
-    return n;
-  };
-  // Текущая неделя, пока не закрыта, серию не прерывает
-  let streak = 0;
-  for (let k = 0; k < 520; k++) {
-    if (inWeek(k) >= planned) streak++;
-    else if (k > 0) break;
-  }
-  let last4 = 0;
-  for (let k = 0; k < 4; k++) last4 += Math.min(inWeek(k), planned);
-  return { days, streak, last4, planned, cur };
-}
-function calendarHtml(att, weeks = 6) {
-  const todayKey = dkey(new Date()), now = Date.now();
+// Календарь месяца: дни с тренировкой — кнопки, по нажатию показываются тренировки за этот день
+function calendarHtml() {
+  const trained = new Set(state.sessions.map((s) => dkey(new Date(s.date))));
+  const now = new Date();
+  const m = ui.calMonth ? new Date(ui.calMonth) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const first = new Date(m.getFullYear(), m.getMonth(), 1);
+  const daysIn = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;
+  const isCurrent = m.getFullYear() === now.getFullYear() && m.getMonth() === now.getMonth();
+  const oldest = state.sessions.length ? new Date(state.sessions[state.sessions.length - 1].date) : now;
+  const hasPrev = first > new Date(oldest.getFullYear(), oldest.getMonth(), 1);
+  const todayKey = dkey(now);
   let cells = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((w) => `<div class="wd">${w}</div>`).join('');
-  for (let k = weeks - 1; k >= 0; k--) {
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(att.cur);
-      d.setDate(att.cur.getDate() - 7 * k + i);
-      const key = dkey(d);
-      const on = att.days.has(key);
-      cells += `<div class="d${on ? ' on' : ''}${key === todayKey ? ' today' : ''}${d.getTime() > now ? ' future' : ''}"${on ? ' aria-label="Тренировка"' : ''}>${d.getDate()}</div>`;
-    }
+  cells += '<div></div>'.repeat(lead);
+  for (let day = 1; day <= daysIn; day++) {
+    const d = new Date(m.getFullYear(), m.getMonth(), day);
+    const key = dkey(d);
+    const cls = `d${key === todayKey ? ' today' : ''}${d > now ? ' future' : ''}`;
+    cells += trained.has(key)
+      ? `<button class="${cls} on${ui.histDate === key ? ' sel' : ''}" data-act="cal-day" data-key="${key}" aria-pressed="${ui.histDate === key}" aria-label="${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}: показать тренировку">${day}</button>`
+      : `<div class="${cls}">${day}</div>`;
   }
-  return `<div class="cal">${cells}</div>`;
+  return `
+    <div class="cal-head">
+      <button class="icon-btn" data-act="cal-prev" aria-label="Предыдущий месяц" ${hasPrev ? '' : 'disabled'}>‹</button>
+      <span class="m">${first.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}</span>
+      <button class="icon-btn" data-act="cal-next" aria-label="Следующий месяц" ${isCurrent ? 'disabled' : ''}>›</button>
+    </div>
+    <div class="cal">${cells}</div>`;
 }
 
 function viewLog() {
-  return state.sessions.map((s) => {
+  const picked = ui.histDate ? state.sessions.filter((s) => dkey(new Date(s.date)) === ui.histDate) : null;
+  const list = picked && picked.length ? picked : state.sessions.slice(0, 2);
+  const head = picked && picked.length
+    ? `<div class="list-head"><h3>${new Date(picked[0].date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}</h3><button class="link" data-act="cal-clear">Последние тренировки</button></div>`
+    : `<div class="list-head"><h3>Последние тренировки</h3></div>`;
+  const hint = !picked && state.sessions.length > 2 ? '<p class="hint">Остальные тренировки — нажмите на отмеченную дату в календаре.</p>' : '';
+  return head + list.map((s) => {
     const setCount = s.entries.reduce((a, e) => a + e.sets.length, 0);
     const date = new Date(s.date).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
     return `
@@ -829,7 +830,7 @@ function viewLog() {
       </ul>
       ${s.note ? `<p class="note-text">${esc(s.note)}</p>` : ''}
     </section>`;
-  }).join('');
+  }).join('') + hint;
 }
 
 // Сколько времени уходит на каждое упражнение (среднее по последним 5 тренировкам)
@@ -870,16 +871,11 @@ function viewHistory() {
   if (!state.sessions.length) {
     return `<h1>История</h1><div class="empty"><div class="big">🏋️</div>Здесь появятся завершённые тренировки</div>`;
   }
-  const att = attendance();
   return `
     <h1>История</h1>
     ${backupBanner()}
-    <div class="tiles" style="margin-top:0">
-      <div class="tile"><div class="k">Недель подряд</div><div class="v">${att.streak}</div></div>
-      <div class="tile"><div class="k">За 4 недели</div><div class="v">${att.last4} <small>из ${att.planned * 4}</small></div></div>
-      <div class="tile"><div class="k">Всего</div><div class="v">${state.sessions.length}</div></div>
-    </div>
-    <section class="card">${calendarHtml(att)}</section>
+    <div class="tile"><div class="k">Всего тренировок</div><div class="v">${state.sessions.length}</div></div>
+    <section class="card">${calendarHtml()}</section>
     <div class="seg" role="group" aria-label="Раздел" style="margin-top:16px">
       <button data-act="hist-view" data-view="log" aria-pressed="${ui.histView === 'log'}">Тренировки</button>
       <button data-act="hist-view" data-view="time" aria-pressed="${ui.histView === 'time'}">Время</button>
@@ -1169,6 +1165,15 @@ const actions = {
     save(); render();
   },
   'hist-view'(el) { ui.histView = el.dataset.view; render(); },
+  'cal-day'(el) {
+    ui.histDate = ui.histDate === el.dataset.key ? null : el.dataset.key;
+    ui.histView = 'log';
+    render();
+    document.querySelector('.list-head')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  },
+  'cal-clear'() { ui.histDate = null; render(); },
+  'cal-prev'() { shiftMonth(-1); },
+  'cal-next'() { shiftMonth(1); },
   'time-day'(el) { ui.timeDay = el.dataset.day; render(); },
   'time-open'(el) {
     const day = getDay(ui.timeDay || ui.dayId);
@@ -1275,6 +1280,13 @@ const actions = {
   export: exportData,
   import() { $('#import-file').click(); },
 };
+
+function shiftMonth(step) {
+  const now = new Date();
+  const m = ui.calMonth ? new Date(ui.calMonth) : new Date(now.getFullYear(), now.getMonth(), 1);
+  ui.calMonth = new Date(m.getFullYear(), m.getMonth() + step, 1).getTime();
+  render();
+}
 
 function moveEx(el, dir) {
   const day = getDay(el.closest('[data-day]').dataset.day);
